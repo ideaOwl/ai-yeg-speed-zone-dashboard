@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Speed Enforcement Zone Dashboard</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            height: 100vh;
+        }
+        #controls {
+            width: 300px;
+            padding: 20px;
+            background-color: #f0f0f0;
+            overflow-y: auto;
+        }
+        #map {
+            flex-grow: 1;
+        }
+        h1 {
+            font-size: 24px;
+            margin-bottom: 20px;
+        }
+        .filter-group {
+            margin-bottom: 20px;
+        }
+        .filter-group h2 {
+            font-size: 18px;
+            margin-bottom: 10px;
+        }
+        .filter-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+        .filter-item input {
+            margin-right: 10px;
+        }
+        .filter-item .icon {
+            margin-right: 5px;
+            font-size: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <h1>Speed Enforcement Zone Dashboard</h1>
+        <div class="filter-group">
+            <h2>Speed Limit</h2>
+            <div id="speed-limit-chart"></div>
+            <div id="speed-limit-filters"></div>
+        </div>
+        <div class="filter-group">
+            <h2>Reason Codes</h2>
+            <div id="reason-code-filters"></div>
+        </div>
+    </div>
+    <div id="map"></div>
+
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script>
+        // Load and process the CSV data
+        d3.csv('data/Scheduled_Photo_Enforcement_Zone_Centre_Points_20240901.csv').then(function(data) {
+            // Process the data
+            data.forEach(d => {
+                d['Speed Limit'] = +d['Speed Limit'];
+                d['Latitude'] = +d['Latitude'];
+                d['Longitude'] = +d['Longitude'];
+                d['Reason Code(s)'] = d['Reason Code(s)'].split(';').map(s => s.trim().replace(/^Designated Zone[–-]\s*Playground$/i, 'Designated Zone - Playground')).filter(s => s);
+            });
+
+            // Create the map
+            const map = L.map('map').setView([53.5461, -113.4938], 11);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; OpenStreetMap contributors'
+            }).addTo(map);
+
+            // Define color scale for speed limits
+            const colorScale = d3.scaleLinear()
+                .domain([d3.min(data, d => d['Speed Limit']), d3.max(data, d => d['Speed Limit'])])
+                .range(['red', 'green']);
+
+            // Define shapes for reason codes
+            const shapes = {
+                'Designated Zone - Playground': '▲',
+                'Higher Frequency of Speeding': '■',
+                'Higher Frequency of Collisions': '●'
+            };
+
+            // Create filters
+            const speedLimits = [...new Set(data.map(d => d['Speed Limit']))].sort((a, b) => a - b);
+            const reasonCodes = [...new Set(data.flatMap(d => d['Reason Code(s)']))];
+
+            // Create speed limit chart
+            const speedLimitCounts = speedLimits.map(speed => ({
+                speed: speed,
+                count: data.filter(d => d['Speed Limit'] === speed).length
+            }));
+
+            const chartWidth = 280;
+            const chartHeight = 200;
+            const margin = { top: 20, right: 30, bottom: 40, left: 90 };
+
+            const svg = d3.select('#speed-limit-chart')
+                .append('svg')
+                .attr('width', chartWidth)
+                .attr('height', chartHeight);
+
+            const x = d3.scaleLinear()
+                .domain([0, d3.max(speedLimitCounts, d => d.count)])
+                .range([margin.left, chartWidth - margin.right]);
+
+            const y = d3.scaleBand()
+                .domain(speedLimitCounts.map(d => d.speed))
+                .range([margin.top, chartHeight - margin.bottom])
+                .padding(0.1);
+
+            svg.selectAll('rect')
+                .data(speedLimitCounts)
+                .join('rect')
+                .attr('x', margin.left)
+                .attr('y', d => y(d.speed))
+                .attr('width', d => x(d.count) - margin.left)
+                .attr('height', y.bandwidth())
+                .attr('fill', 'steelblue');
+
+            svg.append('g')
+                .attr('transform', `translate(0,${chartHeight - margin.bottom})`)
+                .call(d3.axisBottom(x).ticks(5));
+
+            svg.append('g')
+                .attr('transform', `translate(${margin.left},0)`)
+                .call(d3.axisLeft(y));
+
+            svg.append('text')
+                .attr('x', chartWidth / 2)
+                .attr('y', chartHeight - 5)
+                .attr('text-anchor', 'middle')
+                .text('Count');
+
+            svg.append('text')
+                .attr('transform', 'rotate(-90)')
+                .attr('x', -chartHeight / 2)
+                .attr('y', 15)
+                .attr('text-anchor', 'middle')
+                .text('Speed Limit (km/h)');
+
+            // Speed limit filters
+            const speedLimitFilters = d3.select('#speed-limit-filters')
+                .selectAll('div')
+                .data(speedLimits)
+                .enter()
+                .append('div')
+                .attr('class', 'filter-item');
+
+            speedLimitFilters.append('input')
+                .attr('type', 'checkbox')
+                .attr('id', d => `speed-${d}`)
+                .attr('checked', true);
+
+            speedLimitFilters.append('label')
+                .attr('for', d => `speed-${d}`)
+                .text(d => `${d} km/h`);
+
+            // Reason code filters
+            const reasonCodeFilters = d3.select('#reason-code-filters')
+                .selectAll('div')
+                .data(reasonCodes)
+                .enter()
+                .append('div')
+                .attr('class', 'filter-item');
+
+            reasonCodeFilters.append('input')
+                .attr('type', 'checkbox')
+                .attr('id', d => `reason-${d.replace(/\s+/g, '-')}`)
+                .attr('checked', true);
+
+            reasonCodeFilters.append('span')
+                .attr('class', 'icon')
+                .text(d => shapes[d] || '◆');
+
+            reasonCodeFilters.append('label')
+                .attr('for', d => `reason-${d.replace(/\s+/g, '-')}`)
+                .text(d => d);
+
+            // Create map markers
+            const markers = data.map(d => {
+                const marker = L.circleMarker([d.Latitude, d.Longitude], {
+                    radius: 10,
+                    fillColor: 'white',
+                    color: colorScale(d['Speed Limit']),
+                    weight: 3,
+                    opacity: 1,
+                    fillOpacity: 0.8
+                }).addTo(map);
+
+                marker.bindPopup(`
+                    <strong>${d['Location Description']}</strong><br>
+                    Speed Limit: ${d['Speed Limit']} km/h<br>
+                    Reason(s): ${d['Reason Code(s)'].join(', ')}
+                `);
+
+                const label = L.divIcon({
+                    className: 'speed-label',
+                    html: `<div style="background-color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; justify-content: center; align-items: center;">${d['Speed Limit']}</div>`,
+                    iconSize: [20, 20],
+                    iconAnchor: [10, 10]
+                });
+
+                const labelMarker = L.marker([d.Latitude, d.Longitude], {icon: label}).addTo(map);
+
+                const icon = L.divIcon({
+                    className: 'reason-icon',
+                    html: `<div style="font-size: 20px; position: absolute; bottom: -10px; right: -10px;">${shapes[d['Reason Code(s)'][0]] || '◆'}</div>`,
+                    iconSize: [20, 20],
+                    iconAnchor: [0, 0]
+                });
+
+                const iconMarker = L.marker([d.Latitude, d.Longitude], {icon: icon}).addTo(map);
+
+                return {circleMarker: marker, labelMarker: labelMarker, iconMarker: iconMarker, data: d};
+            });
+
+            // Filter function
+            function updateFilters() {
+                const selectedSpeeds = speedLimits.filter(s => d3.select(`#speed-${s}`).property('checked'));
+                const selectedReasons = reasonCodes.filter(r => d3.select(`#reason-${r.replace(/\s+/g, '-')}`).property('checked'));
+
+                markers.forEach(marker => {
+                    const visible = selectedSpeeds.includes(marker.data['Speed Limit']) &&
+                        marker.data['Reason Code(s)'].some(r => selectedReasons.includes(r));
+                    marker.circleMarker.setStyle({opacity: visible ? 1 : 0, fillOpacity: visible ? 0.8 : 0});
+                    marker.labelMarker.setOpacity(visible ? 1 : 0);
+                    marker.iconMarker.setOpacity(visible ? 1 : 0);
+                });
+            }
+
+            // Add event listeners to filters
+            d3.selectAll('input[type="checkbox"]').on('change', updateFilters);
+
+            // Initial update
+            updateFilters();
+        });
+    </script>
+</body>
+</html>
